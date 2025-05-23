@@ -1,20 +1,27 @@
+import React from 'react';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { NavigationContainer } from '@react-navigation/native';
+import { Provider as PaperProvider } from 'react-native-paper';
+import MainNavigator from './src/navigation/MainNavigator';
+import { AuthProvider } from './src/contexts/AuthContext';
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View } from 'react-native';
+import { theme } from './src/styles/theme';
 
+/**
+ * 应用程序主入口组件
+ * 提供全局上下文和主题
+ */
 export default function App() {
   return (
-    <View style={styles.container}>
-      <Text>Open up App.tsx to start working on your app!</Text>
-      <StatusBar style="auto" />
-    </View>
+    <SafeAreaProvider>
+      <PaperProvider theme={theme}>
+        <AuthProvider>
+          <NavigationContainer>
+            <MainNavigator />
+            <StatusBar style="auto" />
+          </NavigationContainer>
+        </AuthProvider>
+      </PaperProvider>
+    </SafeAreaProvider>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-});
