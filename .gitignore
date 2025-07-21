@@ -1,7 +1,8 @@
 # Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
 
-# dependencies
+# Dependencies
 node_modules/
+*/node_modules/
 
 # Expo
 .expo/
@@ -21,7 +22,7 @@ expo-env.d.ts
 # Metro
 .metro-health-check*
 
-# debug
+# Debug
 npm-debug.*
 yarn-debug.*
 yarn-error.*
@@ -30,8 +31,115 @@ yarn-error.*
 .DS_Store
 *.pem
 
-# local env files
+# Local env files
 .env*.local
+.env
 
-# typescript
+# TypeScript
 *.tsbuildinfo
+
+# ================================
+# Spring Rain OCR系统特定配置
+# ================================
+
+# 用户上传的图片文件
+math-solver-backend/uploads/*
+uploads/
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.bmp
+*.webp
+*.svg
+
+# 数据文件 (包含用户数据)
+math-solver-backend/data/problems.json
+math-solver-backend/data/users.json
+data/problems.json
+data/users.json
+
+# 日志文件
+*.log
+logs/
+math-solver-backend/logs/
+
+# 临时文件
+temp_*.txt
+*.tmp
+*.temp
+
+# API密钥和敏感配置
+.env
+.env.local
+.env.development
+.env.production
+config/secrets.js
+api-keys.txt
+
+# IDE和编辑器
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 操作系统
+Thumbs.db
+Desktop.ini
+
+# 备份文件
+*.bak
+*.backup
+*.old
+
+# 测试覆盖率
+coverage/
+*.lcov
+
+# 运行时文件
+*.pid
+*.pid.lock
+
+# 压缩文件
+*.zip
+*.rar
+*.7z
+*.tar.gz
+
+# 构建输出
+build/
+dist/
+out/
+
+# PM2 logs
+pm2.log
+pm2-error.log
+
+# 数据库文件
+*.db
+*.sqlite
+*.sqlite3
+
+# 缓存目录
+.cache/
+.parcel-cache/
+
+# Webpack
+.webpack/
+
+# Next.js
+.next/
+
+# Nuxt.js
+.nuxt/
+
+# Gatsby
+.cache/
+public/
+
+# SvelteKit
+.svelte-kit/
+
+# Storybook
+storybook-static/

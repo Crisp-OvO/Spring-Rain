@@ -1,705 +1,1192 @@
+/**
+ * Qwen数学解题助手后端服务
+ * 支持最新的Qwen2.5-Math和Qwen-VL模型
+ */
+
 const express = require('express');
 const cors = require('cors');
-const bodyParser = require('body-parser');
-const axios = require('axios');
-const fs = require('fs');
+const multer = require('multer');
 const path = require('path');
-// 引入mathjs库用于数学计算和解析
-const math = require('mathjs');
+const fs = require('fs').promises;
+const axios = require('axios');
+const FormData = require('form-data');
+const { v4: uuidv4 } = require('uuid');
+
+// 导入配置
+const QWEN_CONFIG = require('./config/qwen');
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3001;
 
-// 创建uploads目录
-const uploadDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
-
-// 允许跨域请求
+// 中间件配置
 app.use(cors());
-
-// 解析JSON请求体，增加限制大小
-app.use(bodyParser.json({ limit: '50mb' }));
-app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
-
-// 处理静态文件
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-app.use(express.static('public'));
+app.use('/', express.static(path.join(__dirname, 'public')));
 
-// 内存存储 - 实际应用中应使用数据库
-const historyRecords = [];
-
-// Hugging Face API配置
-const HUGGING_FACE_API = {
-  KEY: process.env.HUGGING_FACE_API_KEY || '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',
-  OCR_MODEL_URL: 'https://api.huggingface.co/models/microsoft/trocr-base-handwritten'
-};
-
-// DeepSeekMath API配置
-const DEEPSEEK_MATH_API = {
-  KEY: process.env.DEEPSEEK_MATH_API_KEY || process.env.HUGGING_FACE_API_KEY || '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',
-  MODEL_URL: 'https://api.huggingface.co/models/deepseek-ai/deepseek-math-7b-instruct'
-};
-
-// 模拟数据
-const mockData = {
-  preferences: {
-    theme: 'system',
-    notificationsEnabled: true,
-    syncEnabled: true,
-    ocr: {
-      autoCorrect: true,
-      highAccuracyMode: true
-    },
-    solver: {
-      showSteps: true,
-      detailedExplanation: true,
-      mathFormat: 'normal'
-    },
-    privacy: {
-      shareData: true,
-      saveHistory: true
+// 文件上传配置
+const storage = multer.diskStorage({
+  destination: async (req, file, cb) => {
+    const uploadDir = path.join(__dirname, 'uploads');
+    try {
+      await fs.access(uploadDir);
+    } catch {
+      await fs.mkdir(uploadDir, { recursive: true });
     }
+    cb(null, uploadDir);
   },
-  user: {
-    id: 'user123',
-    email: 'user@example.com',
-    name: '测试用户',
-    createdAt: new Date().toISOString(),
-    lastLoginAt: new Date().toISOString()
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
   }
-};
-
-// 用户首选项接口
-app.get('/user/preferences', (req, res) => {
-  res.json({ preferences: mockData.preferences });
 });
 
-// 用户资料接口
-app.get('/user/profile', (req, res) => {
-  res.json({ profile: mockData.user });
+const upload = multer({
+  storage: storage,
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB限制
+  },
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = /jpeg|jpg|png|gif|bmp|webp/;
+    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+    const mimetype = allowedTypes.test(file.mimetype);
+    
+    if (mimetype && extname) {
+      return cb(null, true);
+    } else {
+      cb(new Error('只支持图片文件 (jpeg, jpg, png, gif, bmp, webp)'));
+    }
+  }
 });
 
-// OCR识别接口 - 接收JSON格式的数据
-app.post('/ocr/math', async (req, res) => {
-  console.log('收到OCR请求');
+// 数据存储配置
+const DATA_DIR = path.join(__dirname, 'data');
+const PROBLEMS_FILE = path.join(DATA_DIR, 'problems.json');
+const USERS_FILE = path.join(DATA_DIR, 'users.json');
+
+// 确保数据目录存在
+async function ensureDataDir() {
+  try {
+    await fs.access(DATA_DIR);
+  } catch {
+    await fs.mkdir(DATA_DIR, { recursive: true });
+  }
+  
+  // 初始化数据文件
+  try {
+    await fs.access(PROBLEMS_FILE);
+  } catch {
+    await fs.writeFile(PROBLEMS_FILE, JSON.stringify([], null, 2));
+  }
   
   try {
-    // 尝试从请求中获取图片数据
-    const imageUri = req.body.imageUri;
-    const base64Image = req.body.base64Image;
-    
-    if (!imageUri && !base64Image) {
-      return res.status(400).json({ error: '缺少图片数据' });
-    }
-    
-    console.log('图片URI:', imageUri ? '已提供' : '未提供');
-    console.log('Base64图片:', base64Image ? '已提供' : '未提供');
+    await fs.access(USERS_FILE);
+  } catch {
+    await fs.writeFile(USERS_FILE, JSON.stringify([], null, 2));
+  }
+}
 
-    // 调用Hugging Face API进行OCR识别
-    try {
-      let imageData;
+// 数据操作函数
+async function loadProblems() {
+  try {
+    const data = await fs.readFile(PROBLEMS_FILE, 'utf8');
+    return JSON.parse(data);
+  } catch (error) {
+    console.error('加载问题数据失败:', error);
+    return [];
+  }
+}
+
+async function saveProblems(problems) {
+  try {
+    await fs.writeFile(PROBLEMS_FILE, JSON.stringify(problems, null, 2));
+    return true;
+  } catch (error) {
+    console.error('保存问题数据失败:', error);
+    return false;
+  }
+}
+
+async function loadUsers() {
+  try {
+    const data = await fs.readFile(USERS_FILE, 'utf8');
+    return JSON.parse(data);
+  } catch (error) {
+    console.error('加载用户数据失败:', error);
+    return [];
+  }
+}
+
+async function saveUsers(users) {
+  try {
+    await fs.writeFile(USERS_FILE, JSON.stringify(users, null, 2));
+    return true;
+  } catch (error) {
+    console.error('保存用户数据失败:', error);
+    return false;
+  }
+}
+
+// Qwen API调用函数
+async function callQwenAPI(endpoint, data, isStream = false) {
+  const apiKey = QWEN_CONFIG.DASHSCOPE.API_KEY;
+  if (!apiKey) {
+    throw new Error('DASHSCOPE_API_KEY 环境变量未设置');
+  }
+
+  const config = {
+    method: 'POST',
+    url: endpoint,
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+      'Accept': isStream ? 'text/event-stream' : 'application/json',
+    },
+    data: data,
+    timeout: QWEN_CONFIG.API_CONFIG.timeout,
+  };
+
+  if (isStream) {
+    config.responseType = 'stream';
+  }
+
+  return axios(config);
+}
+
+// OCR识别接口 - 使用Qwen-VL模型（优化版）
+app.post('/ocr/math', upload.single('image'), async (req, res) => {
+  const requestId = `ocr_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  console.log(`[${requestId}] 收到OCR识别请求`);
+  
+  try {
+    let imageData;
+    let imageUrl;
+    let imageSize = 0;
+    
+    // 第一步：处理图片数据
+    if (req.file) {
+      const imagePath = req.file.path;
+      console.log(`[${requestId}] 处理上传文件: ${req.file.filename}, 大小: ${req.file.size} bytes`);
       
-      if (base64Image && base64Image.startsWith('data:image')) {
-        // 处理base64图片
-        console.log('使用base64图片数据');
-        const base64Data = base64Image.split(',')[1];
-        imageData = Buffer.from(base64Data, 'base64');
-      } else if (imageUri && imageUri.startsWith('http')) {
-        // 处理网络图片
-        console.log('下载网络图片');
-        const response = await axios.get(imageUri, { responseType: 'arraybuffer' });
-        imageData = Buffer.from(response.data);
-      } else {
-        // 移动设备本地文件URI，返回错误告知需要使用base64格式
-        console.log('无法直接处理移动设备文件URI，需要base64编码');
+      try {
+        const imageBuffer = await fs.readFile(imagePath);
+        imageData = imageBuffer.toString('base64');
+        imageSize = imageBuffer.length;
+        imageUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+        console.log(`[${requestId}] 文件读取成功，Base64长度: ${imageData.length}`);
+      } catch (fileError) {
+        console.error(`[${requestId}] 文件读取失败:`, fileError);
         return res.status(400).json({ 
-          error: '图片格式不支持', 
-          message: '移动设备本地文件需要转换为base64格式后提交',
-          status: 'error'
+          error: '文件读取失败',
+          message: fileError.message,
+          status: 'error',
+          requestId: requestId
         });
       }
-
-      // 调用Hugging Face API
-      console.log('调用Hugging Face OCR API...');
-      const huggingFaceResponse = await axios.post(
-        HUGGING_FACE_API.OCR_MODEL_URL,
-        imageData,
-        {
-          headers: {
-            'Authorization': `Bearer ${HUGGING_FACE_API.KEY}`,
-            'Content-Type': 'application/octet-stream'
-          },
-          responseType: 'json'
-        }
-      );
-
-      // 处理API响应
-      console.log('Hugging Face API调用成功');
+    } else if (req.body.imageData) {
+      const rawImageData = req.body.imageData;
+      console.log(`[${requestId}] 处理base64图片数据，原始长度: ${rawImageData.length}`);
       
-      // TrOCR模型通常直接返回识别的文本字符串
-      let recognizedText = '';
-      if (typeof huggingFaceResponse.data === 'string') {
-        recognizedText = huggingFaceResponse.data;
-      } else if (huggingFaceResponse.data && huggingFaceResponse.data.generated_text) {
-        // 某些模型可能返回一个包含generated_text字段的对象
-        recognizedText = huggingFaceResponse.data.generated_text;
-      } else {
-        // 如果返回格式不明确，尝试将响应转换为字符串
-        recognizedText = JSON.stringify(huggingFaceResponse.data);
+      imageData = rawImageData.replace(/^data:image\/[a-z]+;base64,/, '');
+      const testBuffer = Buffer.from(imageData, 'base64');
+      imageSize = testBuffer.length;
+      console.log(`[${requestId}] Base64处理后长度: ${imageData.length}, 解码大小: ${imageSize} bytes`);
+      
+      if (!imageData || imageData.length < 100) {
+        console.error(`[${requestId}] Base64数据太短或无效`);
+        return res.status(400).json({ 
+          error: 'Base64图片数据无效',
+          message: '图片数据太短或格式不正确',
+          status: 'error',
+          requestId: requestId
+        });
       }
-      
-      console.log('识别的文本:', recognizedText);
-      
-      // 格式化为OCR结果
-      const ocrResult = {
-        text: recognizedText,
-        mathExpression: recognizedText, // 直接使用识别文本作为数学表达式
-        confidence: 0.9, // API可能不提供置信度
-        boundingBoxes: [], // API可能不提供边界框
-        imageUrl: imageUri || base64Image.substring(0, 30) + '...',
-        timestamp: new Date().toISOString(),
-        status: 'success',
-        id: `ocr_${Date.now()}`
-      };
-      
-      console.log('返回OCR结果');
-      res.json(ocrResult);
-    } catch (apiError) {
-      console.error('Hugging Face API调用失败:', apiError.message);
-      
-      // 如果API调用失败，返回错误信息
-      res.status(500).json({ 
-        error: 'OCR API调用失败', 
-        message: apiError.message,
+    } else {
+      console.error(`[${requestId}] 缺少图片数据`);
+      return res.status(400).json({ 
+        error: '缺少图片数据',
+        message: '请提供图片文件或base64数据',
         status: 'error',
-        text: '',
-        mathExpression: '',
-        confidence: 0,
-        boundingBoxes: [],
-        imageUrl: imageUri || 'unknown'
+        requestId: requestId
       });
     }
+
+    // 第二步：图片质量分析
+    const imageQuality = analyzeImageQuality(imageSize, imageData);
+    console.log(`[${requestId}] 图片质量分析:`, imageQuality);
+
+    // 第三步：检查API密钥
+    const apiKey = QWEN_CONFIG.DASHSCOPE.API_KEY;
+    console.log(`[${requestId}] API密钥检查: ${apiKey ? '已配置' : '未配置'}`);
+    
+    if (!apiKey) {
+      console.error(`[${requestId}] API密钥未配置`);
+      return res.status(500).json({
+        error: 'API配置错误',
+        message: 'DASHSCOPE_API_KEY环境变量未配置',
+        status: 'error',
+        requestId: requestId,
+        suggestion: '请设置正确的API密钥'
+      });
+    }
+
+    // 第四步：智能OCR识别策略
+    const strategies = [
+      {
+        name: '高精度模式',
+        model: 'qwen-vl-max',
+        prompt: '请仔细识别这张图片中的所有数学公式和文字。保持原有格式，对于复杂公式请用LaTeX格式表示。',
+        maxTokens: 1000
+      },
+      {
+        name: '简化模式',
+        model: 'qwen-vl-max', 
+        prompt: '请识别图片中的主要数学内容，简化复杂格式。',
+        maxTokens: 500
+      },
+      {
+        name: '数学专用模式',
+        model: 'qwen-vl-max',
+        prompt: '这是一张数学题图片。请提取所有数学表达式、公式和题目文字。',
+        maxTokens: 800
+      }
+    ];
+
+    let lastError = null;
+    let ocrResult = null;
+
+    // 尝试不同的识别策略
+    for (let i = 0; i < strategies.length; i++) {
+      const strategy = strategies[i];
+      console.log(`[${requestId}] 尝试策略${i + 1}: ${strategy.name}`);
+      
+      try {
+        const result = await attemptOCR(requestId, imageData, strategy, imageQuality);
+        if (result && result.text && result.text.trim().length > 0) {
+          ocrResult = result;
+          console.log(`[${requestId}] 策略${i + 1}成功，识别内容长度: ${result.text.length}`);
+          break;
+        } else {
+          console.log(`[${requestId}] 策略${i + 1}返回空内容，尝试下一个策略`);
+        }
+      } catch (error) {
+        console.log(`[${requestId}] 策略${i + 1}失败: ${error.message}`);
+        lastError = error;
+        
+        // 如果是权限错误，直接退出
+        if (error.message.includes('download the media resource')) {
+          break;
+        }
+      }
+    }
+
+    // 返回结果
+    if (ocrResult) {
+      console.log(`[${requestId}] OCR识别成功`);
+      res.json(ocrResult);
+    } else {
+      console.log(`[${requestId}] 所有策略都失败，返回备用响应`);
+      
+      // 根据图片质量给出具体建议
+      const suggestions = generateSuggestions(imageQuality, lastError);
+      
+      const fallbackResult = {
+        id: requestId,
+        text: `OCR识别遇到困难，${suggestions.summary}`,
+        mathExpression: '无法识别',
+        confidence: 0.0,
+        boundingBoxes: [],
+        imageUrl: imageUrl || 'uploaded',
+        timestamp: new Date().toISOString(),
+        status: 'fallback',
+        model: 'fallback',
+        error: lastError?.message || '识别失败',
+        imageQuality: imageQuality,
+        suggestions: suggestions.details,
+        usage: {}
+      };
+      
+      res.json(fallbackResult);
+    }
+
   } catch (error) {
-    console.error('OCR服务通用错误:', error.message);
-    res.status(500).json({ 
-      error: '识别失败', 
+    console.error(`[${requestId}] OCR识别出现未预期错误:`, error);
+    console.error(`[${requestId}] 错误堆栈:`, error.stack);
+    
+    const errorResponse = { 
+      error: 'OCR识别失败',
       message: error.message,
       status: 'error',
+      requestId: requestId,
       text: '',
       mathExpression: '',
       confidence: 0,
-      boundingBoxes: []
-    });
+      boundingBoxes: [],
+      timestamp: new Date().toISOString(),
+      details: error.stack ? error.stack.split('\n')[0] : 'Unknown error',
+      suggestion: '请检查图片格式、大小和网络连接'
+    };
+    
+    res.status(500).json(errorResponse);
   }
 });
 
-// 验证OCR结果接口
-app.post('/ocr/validate', (req, res) => {
-  console.log('收到OCR验证请求:', req.body);
-  const { correctedExpression } = req.body;
-  const result = {
-    mathExpression: correctedExpression,
-    text: correctedExpression,
-    confidence: 1.0
+// 图片质量分析函数
+function analyzeImageQuality(imageSize, imageBase64) {
+  const quality = {
+    size: imageSize,
+    sizeCategory: '',
+    estimatedDimensions: '',
+    qualityScore: 0,
+    issues: []
   };
-  console.log('返回验证结果:', result);
-  res.json(result);
-});
 
-// 解析数学表达式接口 - 使用DeepSeekMath模型
+  // 大小分析
+  if (imageSize < 10000) { // 10KB
+    quality.sizeCategory = '太小';
+    quality.issues.push('图片文件过小，可能分辨率不足');
+    quality.qualityScore += 1;
+  } else if (imageSize < 100000) { // 100KB
+    quality.sizeCategory = '偏小';
+    quality.issues.push('图片文件较小，建议使用更高分辨率');
+    quality.qualityScore += 3;
+  } else if (imageSize < 2000000) { // 2MB
+    quality.sizeCategory = '适中';
+    quality.qualityScore += 5;
+  } else if (imageSize < 5000000) { // 5MB
+    quality.sizeCategory = '较大';
+    quality.qualityScore += 4;
+  } else {
+    quality.sizeCategory = '过大';
+    quality.issues.push('图片文件过大，可能影响处理速度');
+    quality.qualityScore += 2;
+  }
+
+  // 估算分辨率
+  const estimatedPixels = imageSize / 3; // 粗略估算
+  if (estimatedPixels < 100000) {
+    quality.estimatedDimensions = '低分辨率';
+    quality.issues.push('预估分辨率较低，可能影响识别效果');
+  } else if (estimatedPixels < 500000) {
+    quality.estimatedDimensions = '中等分辨率';
+  } else {
+    quality.estimatedDimensions = '高分辨率';
+  }
+
+  return quality;
+}
+
+// OCR尝试函数
+async function attemptOCR(requestId, imageData, strategy, imageQuality) {
+  const cleanImageData = imageData.replace(/[^A-Za-z0-9+/=]/g, '');
+  
+  // 检测图片格式
+  let detectedMimeType = 'image/jpeg';
+  if (cleanImageData.startsWith('/9j/')) {
+    detectedMimeType = 'image/jpeg';
+  } else if (cleanImageData.startsWith('iVBORw0')) {
+    detectedMimeType = 'image/png';
+  } else if (cleanImageData.startsWith('R0lGOD')) {
+    detectedMimeType = 'image/gif';
+  }
+  
+  console.log(`[${requestId}] ${strategy.name} - 图片格式: ${detectedMimeType}, Base64长度: ${cleanImageData.length}`);
+  
+  // 验证Base64数据
+  if (cleanImageData.length < 100) {
+    throw new Error(`Base64数据太短 (${cleanImageData.length} 字符)`);
+  }
+  
+  if (cleanImageData.length > 2000000) { // ~1.5MB Base64 limit
+    throw new Error(`Base64数据太大 (${cleanImageData.length} 字符, 建议小于2M字符)`);
+  }
+  
+  const requestData = {
+    model: strategy.model,
+    input: {
+      messages: [
+        {
+          role: 'user',
+          content: [
+            {
+              image: `data:${detectedMimeType};base64,${cleanImageData}`
+            },
+            {
+              text: strategy.prompt
+            }
+          ]
+        }
+      ]
+    },
+    parameters: {
+      result_format: 'message',
+      max_tokens: strategy.maxTokens,
+      incremental_output: false,
+      enable_search: false
+    }
+  };
+
+  console.log(`[${requestId}] ${strategy.name} - 请求数据大小: ${JSON.stringify(requestData).length} 字符`);
+  
+  // 尝试多个API端点
+  const endpoints = [
+    QWEN_CONFIG.DASHSCOPE.VISION_URL,
+    QWEN_CONFIG.DASHSCOPE.VISION_URL_V2,
+    `${QWEN_CONFIG.DASHSCOPE.BASE_URL}/multimodal-generation/generation`
+  ];
+
+  let lastError = null;
+  
+  for (let i = 0; i < endpoints.length; i++) {
+    const endpoint = endpoints[i];
+    console.log(`[${requestId}] ${strategy.name} - 尝试端点${i + 1}: ${endpoint}`);
+
+    const startTime = Date.now();
+    
+    try {
+      const response = await callQwenAPI(endpoint, requestData);
+      const apiCallDuration = Date.now() - startTime;
+
+      console.log(`[${requestId}] ${strategy.name} API调用完成，耗时: ${apiCallDuration}ms`);
+      console.log(`[${requestId}] ${strategy.name} 响应状态: ${response.status}`);
+
+      const result = response.data;
+      if (result.output && result.output.choices && result.output.choices[0]) {
+        const choice = result.output.choices[0];
+        const rawContent = choice.message?.content;
+        let recognizedText = '未能提取内容';
+        
+        if (rawContent && typeof rawContent === 'string') {
+          recognizedText = rawContent;
+        } else if (Array.isArray(rawContent)) {
+          // 处理数组格式的内容
+          recognizedText = rawContent.map(item => {
+            if (typeof item === 'string') return item;
+            if (item.text) return item.text;
+            return JSON.stringify(item);
+          }).join('');
+        } else if (rawContent && typeof rawContent === 'object' && rawContent.text) {
+          recognizedText = rawContent.text;
+        }
+        
+        console.log(`[${requestId}] ${strategy.name} 识别成功，文本长度: ${recognizedText.length}`);
+        
+        const ocrResult = {
+          id: requestId,
+          text: recognizedText,
+          mathExpression: extractMathExpression(recognizedText),
+          confidence: calculateConfidence(recognizedText, imageQuality),
+          boundingBoxes: [],
+          imageUrl: 'uploaded',
+          timestamp: new Date().toISOString(),
+          status: 'success',
+          model: strategy.name,
+          strategy: strategy.name,
+          usage: result.usage || {},
+          apiCallDuration: apiCallDuration,
+          imageQuality: imageQuality,
+          apiEndpoint: endpoint,
+          rawContent: rawContent // 调试用
+        };
+        
+        return ocrResult;
+      } else {
+        console.log(`[${requestId}] ${strategy.name} 响应格式异常:`, JSON.stringify(result, null, 2));
+        throw new Error(`${strategy.name}返回数据格式不正确: ${JSON.stringify(result.output || result)}`);
+      }
+    } catch (error) {
+      const apiCallDuration = Date.now() - startTime;
+      console.error(`[${requestId}] ${strategy.name} 端点${i + 1}失败，耗时: ${apiCallDuration}ms`);
+      console.error(`[${requestId}] ${strategy.name} 错误详情:`, error.message);
+      
+      lastError = error;
+      
+      // 详细的错误信息
+      if (error.response) {
+        console.error(`[${requestId}] ${strategy.name} HTTP状态: ${error.response.status}`);
+        console.error(`[${requestId}] ${strategy.name} 响应头:`, error.response.headers);
+        console.error(`[${requestId}] ${strategy.name} 响应数据:`, error.response.data);
+        
+        let detailedError = `HTTP ${error.response.status}`;
+        let suggestion = '';
+        
+        if (error.response.status === 400) {
+          const responseData = error.response.data;
+          if (responseData && responseData.message) {
+            detailedError += `: ${responseData.message}`;
+          }
+          
+          if (responseData && responseData.code) {
+            detailedError += ` (代码: ${responseData.code})`;
+          }
+          
+          // 根据具体错误提供建议
+          if (detailedError.includes('download the media resource')) {
+            suggestion = 'API密钥可能没有视觉模型权限，请检查阿里云控制台';
+          } else if (detailedError.includes('image')) {
+            suggestion = '图片格式或大小可能有问题，尝试转换为JPG格式';
+          } else if (detailedError.includes('token')) {
+            suggestion = '请求内容可能过大，尝试压缩图片';
+          } else if (detailedError.includes('format')) {
+            suggestion = '请求格式可能不正确';
+          } else if (detailedError.includes('not found') || detailedError.includes('404')) {
+            suggestion = 'API端点可能不正确，尝试下一个端点';
+            continue; // 继续尝试下一个端点
+          } else {
+            suggestion = '请检查图片质量、格式和大小';
+          }
+        } else if (error.response.status === 401) {
+          detailedError += ': API密钥无效或已过期';
+          suggestion = '请检查DASHSCOPE_API_KEY是否正确';
+        } else if (error.response.status === 403) {
+          detailedError += ': 权限不足';
+          suggestion = '请检查API密钥是否有相应模型的访问权限';
+        } else if (error.response.status === 429) {
+          detailedError += ': 请求频率过高';
+          suggestion = '请稍后重试';
+        } else if (error.response.status >= 500) {
+          detailedError += ': 服务器错误';
+          suggestion = '阿里云服务可能暂时不可用，请稍后重试';
+        }
+        
+        // 如果不是端点问题，记录详细错误但继续尝试
+        if (!detailedError.includes('not found') && !detailedError.includes('404')) {
+          lastError = new Error(`${detailedError}${suggestion ? ' - ' + suggestion : ''}`);
+        }
+      } else if (error.code === 'ENOTFOUND') {
+        lastError = new Error('无法连接到阿里云服务，请检查网络连接');
+      } else if (error.code === 'ETIMEDOUT') {
+        lastError = new Error('请求超时，请检查网络连接或稍后重试');
+      } else {
+        lastError = new Error(`网络错误: ${error.message}`);
+      }
+    }
+  }
+  
+  // 所有端点都失败了
+  if (lastError) {
+    throw lastError;
+  } else {
+    throw new Error(`所有API端点都无法访问`);
+  }
+}
+
+// 置信度计算
+function calculateConfidence(text, imageQuality) {
+  let confidence = 0.8; // 基础置信度
+  
+  // 根据文本长度调整
+  if (text.length > 50) confidence += 0.1;
+  if (text.length < 5) confidence -= 0.3;
+  
+  // 根据图片质量调整
+  confidence += (imageQuality.qualityScore / 5) * 0.2;
+  
+  // 根据数学内容调整
+  if (text.match(/[+\-*/=()]/)) confidence += 0.05;
+  if (text.match(/\\[a-zA-Z]+/)) confidence += 0.05; // LaTeX命令
+  
+  return Math.max(0.1, Math.min(0.99, confidence));
+}
+
+// 建议生成函数
+function generateSuggestions(imageQuality, error) {
+  const suggestions = {
+    summary: '',
+    details: []
+  };
+
+  if (imageQuality.qualityScore < 3) {
+    suggestions.summary = '图片质量可能不足';
+    suggestions.details.push('尝试使用更高分辨率的图片');
+    suggestions.details.push('确保图片清晰、光线充足');
+    suggestions.details.push('避免倾斜拍摄，正面平拍效果更佳');
+  }
+
+  if (imageQuality.size < 50000) {
+    suggestions.details.push('图片文件太小，建议重新拍摄更高质量的图片');
+  }
+
+  if (error && error.message.includes('download the media resource')) {
+    suggestions.summary = '可能是图片格式问题';
+    suggestions.details.push('尝试转换图片格式为JPG或PNG');
+    suggestions.details.push('确保图片文件没有损坏');
+  }
+
+  if (suggestions.details.length === 0) {
+    suggestions.summary = '可能是复杂公式识别困难';
+    suggestions.details.push('尝试分段拍摄复杂公式');
+    suggestions.details.push('确保手写字体清晰工整');
+    suggestions.details.push('避免背景干扰，使用纯色背景');
+  }
+
+  return suggestions;
+}
+
+// 数学表达式提取函数
+function extractMathExpression(text) {
+  // 简单的数学表达式提取逻辑
+  const mathPatterns = [
+    /\$\$(.+?)\$\$/g, // LaTeX格式
+    /\$(.+?)\$/g,     // 内联LaTeX
+    /([0-9+\-*/()^=√∑∏∫αβγπ≠≤≥∞]+)/g, // 数学符号
+  ];
+  
+  for (const pattern of mathPatterns) {
+    const matches = text.match(pattern);
+    if (matches && matches.length > 0) {
+      return matches[0].replace(/\$\$?/g, '').trim();
+    }
+  }
+  
+  return text.trim();
+}
+
+// 数学解题接口 - 使用Qwen2.5-Math模型
 app.post('/math/solve', async (req, res) => {
   console.log('收到解题请求:', req.body);
-  const { expression } = req.body;
+  
+  const { expression, method = 'thinking', enableSearch = false } = req.body;
   
   if (!expression) {
-    return res.status(400).json({ error: '缺少表达式参数' });
+    return res.status(400).json({ error: '缺少数学表达式' });
   }
   
   try {
-    console.log('开始解析表达式:', expression);
+    const problemId = `problem_${Date.now()}_${uuidv4().substring(0, 8)}`;
     
-    // 创建解题结果对象
-    const solution = {
-      id: `problem_${Date.now()}`,
+    // 选择模型和提示词
+    const mathModel = QWEN_CONFIG.MATH_MODEL.QWEN_PLUS;
+    let prompt;
+    
+    switch (method) {
+      case 'cot':
+        prompt = QWEN_CONFIG.PROMPTS.MATH_SOLVER.COT.replace('{expression}', expression);
+        break;
+      case 'tir':
+        prompt = QWEN_CONFIG.PROMPTS.MATH_SOLVER.TIR.replace('{expression}', expression);
+        break;
+      default:
+        prompt = QWEN_CONFIG.PROMPTS.MATH_SOLVER.THINKING.replace('{expression}', expression);
+    }
+
+    // 构建API请求
+    const requestData = {
+      model: mathModel.name,
+      messages: [
+        {
+          role: 'system',
+          content: '你是一个专业的数学解题助手，擅长解决各种数学问题。请提供详细、准确的解题过程。'
+        },
+        {
+          role: 'user',
+          content: prompt
+        }
+      ],
+      stream: true,
+      enable_thinking: mathModel.supportsThinking,
+      enable_search: enableSearch && mathModel.supportsSearch,
+      max_tokens: mathModel.maxOutputTokens,
+    };
+
+    console.log('调用Qwen数学模型:', mathModel.name);
+    
+    // 设置流式响应
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': 'Cache-Control'
+    });
+
+    const response = await callQwenAPI(
+      `${QWEN_CONFIG.DASHSCOPE.COMPATIBLE_URL}/chat/completions`,
+      requestData,
+      true
+    );
+
+    let fullResponse = '';
+    let thinkingContent = '';
+    let solution = {
+      id: problemId,
       expression,
       steps: [],
       result: '',
-      latex: expression,
-      method: '数学推理模型',
+      latex: '',
+      method: method,
       explanation: '',
-      type: determineExpressionType(expression),
+      type: determineProblemType(expression),
       difficulty: determineDifficulty(expression),
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      model: mathModel.name
     };
-    
-    try {
-      // 构建提示词
-      const prompt = `请解决以下数学问题，并提供详细的解题步骤：\n${expression}\n请首先分析问题类型，然后按照逻辑顺序给出解题步骤，最后给出结果。`;
+
+    response.data.on('data', (chunk) => {
+      const lines = chunk.toString().split('\n').filter(line => line.trim());
       
-      // 调用DeepSeekMath模型
-      console.log('调用DeepSeekMath API...');
-      const deepseekResponse = await axios.post(
-        DEEPSEEK_MATH_API.MODEL_URL,
-        {
-          inputs: prompt,
-          parameters: {
-            max_new_tokens: 512,
-            temperature: 0.2,
-            top_p: 0.9,
-            do_sample: true
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          const data = line.replace('data: ', '');
+          
+          if (data === '[DONE]') {
+            // 处理完整响应
+            solution.explanation = fullResponse;
+            solution.steps = parseSteps(fullResponse);
+            solution.result = extractFinalAnswer(fullResponse);
+            
+            // 保存问题到数据库
+            saveProblemToDatabase(solution);
+            
+            res.write(`data: ${JSON.stringify({ type: 'complete', solution })}\n\n`);
+            res.end();
+            return;
           }
-        },
-        {
-          headers: {
-            'Authorization': `Bearer ${DEEPSEEK_MATH_API.KEY}`,
-            'Content-Type': 'application/json'
+          
+          try {
+            const parsed = JSON.parse(data);
+            const delta = parsed.choices?.[0]?.delta;
+            
+            if (delta?.reasoning_content) {
+              thinkingContent += delta.reasoning_content;
+              res.write(`data: ${JSON.stringify({ 
+                type: 'thinking', 
+                content: delta.reasoning_content 
+              })}\n\n`);
+            }
+            
+            if (delta?.content) {
+              fullResponse += delta.content;
+              res.write(`data: ${JSON.stringify({ 
+                type: 'content', 
+                content: delta.content 
+              })}\n\n`);
+            }
+          } catch (parseError) {
+            console.error('解析流数据失败:', parseError);
           }
         }
-      );
-      
-      console.log('DeepSeekMath API调用成功');
-      
-      // 处理API响应
-      let modelOutput = '';
-      if (typeof deepseekResponse.data === 'string') {
-        modelOutput = deepseekResponse.data;
-      } else if (deepseekResponse.data && deepseekResponse.data.generated_text) {
-        modelOutput = deepseekResponse.data.generated_text;
-      } else {
-        modelOutput = JSON.stringify(deepseekResponse.data);
       }
-      
-      // 解析模型输出
-      console.log('解析模型输出');
-      
-      // 尝试从输出中提取步骤和结果
-      const lines = modelOutput.split('\n').filter(line => line.trim());
-      
-      // 找到答案或结果
-      let resultLine = lines.find(line => 
-        line.includes('答案') || 
-        line.includes('结果') || 
-        line.includes('solution') || 
-        line.includes('=')
-      );
-      
-      // 步骤是除了前两行（可能是重复问题）之外的所有行
-      let steps = lines.slice(2);
-      
-      // 如果找不到明确的结果行，使用最后一行
-      if (!resultLine && steps.length > 0) {
-        resultLine = steps[steps.length - 1];
-      }
-      
-      solution.steps = steps;
-      solution.result = resultLine || '无法确定结果';
-      solution.explanation = modelOutput;
-      
-    } catch (modelError) {
-      console.error('DeepSeekMath API调用失败:', modelError.message);
-      
-      // 如果API调用失败，使用mathjs作为备份方案
-      solution.steps.push('数学推理模型调用失败，使用备用方法');
-      
-      if (expression.includes('=')) {
-        // 方程处理的简化逻辑
-        solution.steps.push(`原方程: ${expression}`);
-        solution.steps.push('由于模型不可用，无法提供详细步骤');
-        solution.result = '请稍后重试';
-      } else {
-        // 表达式计算的简化逻辑
-        try {
-          const result = math.evaluate(expression);
-          solution.steps.push(`表达式求值: ${expression} = ${result}`);
-          solution.result = `${result}`;
-        } catch (err) {
-          solution.steps.push(`计算失败: ${err.message}`);
-          solution.result = '表达式格式错误';
-        }
-      }
-    }
-    
-    console.log('解题完成:', solution.result);
-    res.json(solution);
+    });
+
+    response.data.on('error', (error) => {
+      console.error('流式响应错误:', error);
+      res.write(`data: ${JSON.stringify({ 
+        type: 'error', 
+        error: error.message 
+      })}\n\n`);
+      res.end();
+    });
+
   } catch (error) {
     console.error('解题失败:', error);
     res.status(500).json({
       error: '解题失败',
       message: error.message,
-      expression,
-      steps: ['解题过程出错'],
-      result: '求解失败',
       timestamp: new Date().toISOString()
     });
   }
 });
 
-// 生成LaTeX格式接口
-app.post('/math/latex', (req, res) => {
-  console.log('收到LaTeX生成请求:', req.body);
-  const { expression } = req.body;
+// 保存问题到数据库
+async function saveProblemToDatabase(solution) {
+  try {
+    const problems = await loadProblems();
+    problems.unshift(solution);
+    
+    // 保留最近1000个问题
+    if (problems.length > 1000) {
+      problems.splice(1000);
+    }
+    
+    await saveProblems(problems);
+    console.log('问题已保存到数据库:', solution.id);
+  } catch (error) {
+    console.error('保存问题失败:', error);
+  }
+}
+
+// 解析解题步骤
+function parseSteps(content) {
+  const stepPatterns = [
+    /\d+[\.、]\s*(.+?)(?=\d+[\.、]|$)/g,
+    /步骤\s*\d+[：:]\s*(.+?)(?=步骤\s*\d+|$)/g,
+    /第\s*\d+\s*步[：:]\s*(.+?)(?=第\s*\d+\s*步|$)/g,
+  ];
   
-  if (!expression) {
-    console.error('缺少表达式参数');
-    return res.status(400).json({ 
-      error: '缺少参数', 
-      message: '需要提供expression参数' 
-    });
+  for (const pattern of stepPatterns) {
+    const matches = [...content.matchAll(pattern)];
+    if (matches.length > 0) {
+      return matches.map(match => match[1].trim());
+    }
   }
   
+  // 如果没有明确的步骤标记，按段落分割
+  return content.split('\n').filter(line => line.trim().length > 0);
+}
+
+// 提取最终答案
+function extractFinalAnswer(content) {
+  const answerPatterns = [
+    /答案[：:]?\s*(.+?)$/m,
+    /结果[：:]?\s*(.+?)$/m,
+    /因此[：:]?\s*(.+?)$/m,
+    /所以[：:]?\s*(.+?)$/m,
+    /\\boxed\{([^}]+)\}/,
+    /最终答案[：:]?\s*(.+?)$/m,
+  ];
+  
+  for (const pattern of answerPatterns) {
+    const match = content.match(pattern);
+    if (match) {
+      return match[1].trim();
+    }
+  }
+  
+  // 如果没有找到明确答案，返回最后一行
+  const lines = content.split('\n').filter(line => line.trim());
+  return lines[lines.length - 1] || '无法确定答案';
+}
+
+// 判断问题类型
+function determineProblemType(expression) {
+  if (/[∫∑∏]/.test(expression)) return 'calculus';
+  if (/[a-z]\s*=/.test(expression)) return 'equation';
+  if (/[+\-*/]/.test(expression)) return 'arithmetic';
+  if (/[≤≥<>]/.test(expression)) return 'inequality';
+  if (/[√^²³]/.test(expression)) return 'algebra';
+  return 'other';
+}
+
+// 判断难度级别
+function determineDifficulty(expression) {
+  let complexity = 0;
+  
+  if (/[∫∑∏]/.test(expression)) complexity += 3;
+  if (/[√^]/.test(expression)) complexity += 2;
+  if (/[+\-*/()]/.test(expression)) complexity += 1;
+  if (expression.length > 50) complexity += 1;
+  
+  if (complexity <= 2) return 'easy';
+  if (complexity <= 4) return 'medium';
+  return 'hard';
+}
+
+// 获取历史记录接口
+app.get('/history', async (req, res) => {
   try {
-    // 使用mathjs解析表达式，然后转换为LaTeX
-    const node = math.parse(expression);
-    const latex = node.toTex({
-      parenthesis: 'keep',
-      implicit: 'show'
+    const { page = 1, limit = 20, type, difficulty } = req.query;
+    const problems = await loadProblems();
+    
+    let filtered = problems;
+    
+    if (type && type !== 'all') {
+      filtered = filtered.filter(p => p.type === type);
+    }
+    
+    if (difficulty && difficulty !== 'all') {
+      filtered = filtered.filter(p => p.difficulty === difficulty);
+    }
+    
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + parseInt(limit);
+    const paginated = filtered.slice(startIndex, endIndex);
+        
+        res.json({ 
+      problems: paginated,
+      total: filtered.length,
+      page: parseInt(page),
+      limit: parseInt(limit),
+      totalPages: Math.ceil(filtered.length / limit)
     });
-    
-    const result = { 
-      expression,
-      latex,
-      formatted: true
-    };
-    
-    console.log('返回LaTeX结果:', result);
-    res.json(result);
   } catch (error) {
-    console.error('生成LaTeX失败:', error);
+    console.error('获取历史记录失败:', error);
+    res.status(500).json({ error: '获取历史记录失败' });
+  }
+});
+
+// 删除历史记录接口
+app.delete('/history/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const problems = await loadProblems();
+    const filtered = problems.filter(p => p.id !== id);
     
-    // 简单转换(备用方案)
-    const simpleLatex = expression
-      .replace(/\*/g, '\\cdot ')
-      .replace(/\//g, '\\frac{')
-      .replace(/\^/g, '^{');
+    if (await saveProblems(filtered)) {
+      res.json({ success: true, message: '删除成功' });
+      } else {
+      res.status(500).json({ error: '删除失败' });
+    }
+  } catch (error) {
+    console.error('删除记录失败:', error);
+    res.status(500).json({ error: '删除记录失败' });
+  }
+});
+
+// 清空历史记录接口
+app.delete('/history', async (req, res) => {
+  try {
+    if (await saveProblems([])) {
+      res.json({ success: true, message: '清空成功' });
+      } else {
+      res.status(500).json({ error: '清空失败' });
+    }
+  } catch (error) {
+    console.error('清空记录失败:', error);
+    res.status(500).json({ error: '清空记录失败' });
+  }
+});
+
+// 用户数据接口
+app.post('/user/profile', async (req, res) => {
+  try {
+    const { userId, ...profileData } = req.body;
+    const users = await loadUsers();
     
-    res.json({ 
-      expression,
-      latex: simpleLatex,
-      formatted: false,
+    let userIndex = users.findIndex(u => u.id === userId);
+    if (userIndex === -1) {
+      // 新用户
+      const newUser = {
+        id: userId || uuidv4(),
+        ...profileData,
+        createdAt: new Date().toISOString(),
+        lastLogin: new Date().toISOString()
+      };
+      users.push(newUser);
+      } else {
+      // 更新用户
+      users[userIndex] = {
+        ...users[userIndex],
+        ...profileData,
+        lastLogin: new Date().toISOString()
+      };
+    }
+    
+    if (await saveUsers(users)) {
+      res.json({ success: true, user: users[userIndex] || users[users.length - 1] });
+      } else {
+      res.status(500).json({ error: '保存用户数据失败' });
+    }
+  } catch (error) {
+    console.error('用户数据操作失败:', error);
+    res.status(500).json({ error: '用户数据操作失败' });
+  }
+});
+
+// API权限测试接口
+app.post('/api/test-connection', async (req, res) => {
+  console.log('API连接测试请求');
+  
+  try {
+    const apiKey = QWEN_CONFIG.DASHSCOPE.API_KEY;
+    if (!apiKey) {
+      return res.status(400).json({
+        success: false,
+        message: 'API密钥未配置'
+      });
+    }
+
+    // 简单的健康检查
+    res.json({
+      success: true,
+      message: 'API密钥已配置',
+      hasApiKey: true,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('API连接测试失败:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+// 文本模型测试接口
+app.post('/api/test-text', async (req, res) => {
+  console.log('文本模型测试请求');
+  
+  try {
+    const apiKey = QWEN_CONFIG.DASHSCOPE.API_KEY;
+    if (!apiKey) {
+      return res.status(400).json({
+        success: false,
+        message: 'API密钥未配置'
+      });
+    }
+
+    const requestData = {
+      model: 'qwen-plus',
+      input: {
+        messages: [
+          {
+            role: 'user',
+            content: '你好，这是一个API权限测试。请简短回复。'
+          }
+        ]
+      },
+      parameters: {
+        result_format: 'message',
+        max_tokens: 50
+      }
+    };
+
+    const response = await callQwenAPI(
+      `${QWEN_CONFIG.DASHSCOPE.BASE_URL}/text-generation/generation`,
+      requestData
+    );
+
+    if (response.data.output && response.data.output.choices && response.data.output.choices[0]) {
+      const responseText = response.data.output.choices[0].message.content;
+      res.json({
+        success: true,
+        message: '文本模型测试成功',
+        response: responseText,
+        model: 'qwen-plus'
+      });
+    } else {
+      throw new Error('文本模型响应格式异常');
+    }
+  } catch (error) {
+    console.error('文本模型测试失败:', error);
+    res.status(500).json({
+      success: false,
+      message: error.response?.data?.message || error.message,
       error: error.message
     });
   }
 });
 
-// 历史记录接口
-app.get('/user/history', (req, res) => {
-  console.log('获取历史记录');
-  // 如果有内存存储的记录就返回，否则返回模拟数据
-  if (historyRecords.length > 0) {
-    res.json(historyRecords);
-  } else {
-    res.json([
-      {
-        id: 'problem_1',
-        expression: '2x + 5 = 15',
-        steps: ['移项: 2x = 10', '除以2: x = 5'],
-        result: 'x = 5',
-        timestamp: new Date().toISOString(),
-        type: 'algebra',
-        difficulty: 'easy',
-        mastered: true
-      },
-      {
-        id: 'problem_2',
-        expression: 'x^2 - 4 = 0',
-        steps: ['因式分解: (x+2)(x-2) = 0', '求解: x = 2 或 x = -2'],
-        result: 'x = 2 或 x = -2',
-        timestamp: new Date(Date.now() - 86400000).toISOString(),
-        type: 'algebra',
-        difficulty: 'medium',
-        mastered: false
-      }
-    ]);
-  }
-});
-
-// 保存历史记录接口
-app.post('/user/history', (req, res) => {
-  console.log('收到历史记录保存请求:', req.body);
+// OCR模型测试接口
+app.post('/api/test-ocr', async (req, res) => {
+  console.log('OCR模型测试请求');
   
   try {
-    const { problemId, solution } = req.body;
+    const { imageData } = req.body;
+    const apiKey = QWEN_CONFIG.DASHSCOPE.API_KEY;
     
-    if (solution) {
-      // 保存到内存中 - 实际应用应保存到数据库
-      historyRecords.unshift(solution);
-      
-      // 限制最多保存100条记录
-      if (historyRecords.length > 100) {
-        historyRecords.pop();
-      }
-      
-      res.json({ 
-        success: true, 
-        message: '历史记录已保存',
-        timestamp: new Date().toISOString()
+    if (!apiKey) {
+      return res.status(400).json({
+        success: false,
+        message: 'API密钥未配置'
       });
-    } else {
-      res.status(400).json({ error: '无效的解题记录' });
     }
-  } catch (error) {
-    console.error('保存历史记录失败:', error);
-    res.status(500).json({ error: '保存失败', message: error.message });
-  }
-});
 
-// 更新历史记录接口
-app.put('/user/history/:id', (req, res) => {
-  console.log(`更新历史记录 ID: ${req.params.id}`, req.body);
-  
-  try {
-    const recordId = req.params.id;
-    const updates = req.body;
+    if (!imageData) {
+      return res.status(400).json({
+        success: false,
+        message: '缺少测试图片数据'
+      });
+    }
+
+    // 提取base64数据
+    const base64Data = imageData.replace(/^data:image\/[a-z]+;base64,/, '');
     
-    // 查找并更新记录
-    const recordIndex = historyRecords.findIndex(record => record.id === recordId);
-    
-    if (recordIndex !== -1) {
-      // 更新记录
-      historyRecords[recordIndex] = {
-        ...historyRecords[recordIndex],
-        ...updates,
-        lastUpdated: new Date().toISOString()
-      };
-      
+    const requestData = {
+      model: 'qwen-vl-max',
+      input: {
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                image: imageData
+              },
+              {
+                text: '这是什么图片？请简短回复。'
+              }
+            ]
+          }
+        ]
+      },
+      parameters: {
+        result_format: 'message',
+        max_tokens: 100
+      }
+    };
+
+    const response = await callQwenAPI(
+      `${QWEN_CONFIG.DASHSCOPE.BASE_URL}/multimodal-generation/generation`,
+      requestData
+    );
+
+    if (response.data.output && response.data.output.choices && response.data.output.choices[0]) {
+      const responseText = response.data.output.choices[0].message.content;
       res.json({
         success: true,
-        message: `历史记录 ${recordId} 已更新`,
-        updatedFields: updates
+        message: 'OCR模型测试成功',
+        response: responseText,
+        model: 'qwen-vl-max'
       });
     } else {
-      res.status(404).json({ error: '找不到指定的记录' });
+      throw new Error('OCR模型响应格式异常');
     }
   } catch (error) {
-    console.error('更新历史记录失败:', error);
-    res.status(500).json({ error: '更新失败', message: error.message });
+    console.error('OCR模型测试失败:', error);
+    
+    let errorMessage = error.message;
+    let errorDetails = '';
+    
+    if (error.response) {
+      errorMessage = `HTTP ${error.response.status}`;
+      errorDetails = error.response.data?.message || error.response.statusText;
+      
+      if (error.response.status === 400 && errorDetails.includes('download the media resource')) {
+        errorMessage = 'OCR权限不足';
+        errorDetails = '无法下载媒体资源，可能是API密钥没有视觉模型权限';
+      }
+    }
+    
+    res.status(500).json({
+      success: false,
+      message: errorMessage,
+      error: errorDetails || error.message,
+      statusCode: error.response?.status
+    });
   }
 });
 
-// 统计数据接口
-app.get('/user/statistics', (req, res) => {
-  console.log('获取统计数据');
-  
-  try {
-    // 根据历史记录计算统计数据
-    const totalProblems = historyRecords.length;
-    const masteredProblems = historyRecords.filter(item => item.mastered).length;
-    
-    // 题型分布
-    const typeDistribution = {};
-    historyRecords.forEach(item => {
-      if (item.type) {
-        typeDistribution[item.type] = (typeDistribution[item.type] || 0) + 1;
-      } else {
-        typeDistribution['other'] = (typeDistribution['other'] || 0) + 1;
-      }
-    });
-    
-    // 难度分布
-    const difficultyDistribution = {};
-    historyRecords.forEach(item => {
-      if (item.difficulty) {
-        difficultyDistribution[item.difficulty] = (difficultyDistribution[item.difficulty] || 0) + 1;
-      } else {
-        difficultyDistribution['medium'] = (difficultyDistribution['medium'] || 0) + 1;
-      }
-    });
-    
-    res.json({
-      statistics: {
-        totalProblems,
-        masteredProblems,
-        typeDistribution,
-        difficultyDistribution,
-        lastUpdated: new Date().toISOString()
-      }
-    });
-  } catch (error) {
-    console.error('获取统计数据失败:', error);
-    res.status(500).json({ error: '获取统计失败', message: error.message });
-  }
+// 健康检查接口
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    version: '2.0.0',
+    models: {
+      math: QWEN_CONFIG.MATH_MODEL.QWEN_PLUS.name,
+      ocr: QWEN_CONFIG.OCR_MODEL.QWEN_VL_MAX.name
+    }
+  });
+});
+
+// 错误处理中间件
+app.use((error, req, res, next) => {
+  console.error('服务器错误:', error);
+    res.status(500).json({
+    error: '服务器内部错误',
+    message: error.message,
+    timestamp: new Date().toISOString()
+  });
 });
 
 // 启动服务器
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`服务器运行在 http://localhost:${PORT}`);
-  console.log(`对外IP地址: http://192.168.31.160:${PORT}`);
-  console.log(`使用Hugging Face OCR API: ${HUGGING_FACE_API.OCR_MODEL_URL}`);
-  console.log(`使用DeepSeekMath API: ${DEEPSEEK_MATH_API.MODEL_URL}`);
-});
-
-// 辅助函数
-
-// 确定表达式类型
-function determineExpressionType(expr) {
-  if (expr.includes('=')) {
-    if (expr.match(/x\^2/) || expr.match(/x²/) || expr.match(/\([^)]*\)\^2/)) {
-      return 'quadratic';
-    } else if (expr.match(/x[\s]*[\+\-\=]/)) {
-      return 'algebra';
-    } else if (expr.match(/sin|cos|tan|log|ln/i)) {
-      return 'calculus';
-    } else if (expr.match(/√|sqrt|root/i)) {
-      return 'algebra';
-    }
-    return 'algebra';
-  } else if (expr.match(/[\+\-\*\/\^]/)) {
-    return 'arithmetic';
-  }
-  return 'other';
-}
-
-// 确定难度
-function determineDifficulty(expr) {
-  // 简单判断：表达式长度和复杂性
-  const complexity = expr.length + (expr.match(/[\+\-\*\/\^=]/g) || []).length;
-  
-  if (complexity < 10) return 'easy';
-  if (complexity < 20) return 'medium';
-  return 'hard';
-}
-
-// 解析是否为线性方程
-function isLinearEquation(expr) {
-  // 检查是否包含x的二次方或更高次
-  return expr.includes('=') && 
-         !expr.match(/x\^[2-9]|x²|x³/) && 
-         expr.match(/[a-z]/);
-}
-
-// 检查是否为二次方程
-function isQuadraticEquation(expr) {
-  // 检查是否包含x的二次方但不包含更高次
-  return expr.includes('=') && 
-         (expr.match(/x\^2|x²/) || expr.match(/\([^)]*\)\^2/)) && 
-         !expr.match(/x\^[3-9]|x³/);
-}
-
-// 将表达式展开为项
-function expandTerms(expr) {
-  // 简单的拆分方法，实际应用中需要更复杂的解析
-  return expr.replace(/\s/g, '')
-      .replace(/-/g, '+-')
-      .split('+')
-      .filter(term => term !== '');
-}
-
-// 找出表达式中的变量
-function findVariables(expr) {
-  const matches = expr.match(/[a-z]/g);
-  if (!matches) return [];
-  return [...new Set(matches)]; // 去重
-}
-
-// 提取系数
-function extractCoefficient(term, variable) {
-  if (term === variable) return 1;
-  if (term === `-${variable}`) return -1;
-  
-  const coefficient = term.replace(new RegExp(`${variable}$`), '');
-  return parseFloat(coefficient) || 0;
-}
-
-// 将二次方程标准化为 ax^2 + bx + c = 0
-function standardizeQuadratic(leftSide, rightSide) {
+async function startServer() {
   try {
-    // 移项：所有内容移到左侧
-    const expr = `(${leftSide}) - (${rightSide})`;
-    // 使用mathjs展开并简化
-    const simplified = math.simplify(expr).toString();
-    return simplified;
-  } catch (e) {
-    // 简化失败时返回原始表达式
-    return `${leftSide} - (${rightSide})`;
+    await ensureDataDir();
+    console.log('数据目录初始化完成');
+    
+    app.listen(PORT, () => {
+      console.log(`🚀 Qwen数学解题助手后端服务启动成功`);
+      console.log(`📡 服务地址: http://localhost:${PORT}`);
+      console.log(`🤖 数学模型: ${QWEN_CONFIG.MATH_MODEL.QWEN_PLUS.name}`);
+      console.log(`👁️ OCR模型: ${QWEN_CONFIG.OCR_MODEL.QWEN_VL_MAX.name}`);
+      console.log(`📊 API配置: ${QWEN_CONFIG.DASHSCOPE.API_KEY ? '✅' : '❌'} DASHSCOPE_API_KEY`);
+    });
+  } catch (error) {
+    console.error('启动服务器失败:', error);
+    process.exit(1);
   }
 }
 
-// 从标准形式提取二次方程系数
-function extractQuadraticCoefficients(expr) {
-  let variable = 'x'; // 默认变量
-  
-  // 先尝试找出变量
-  const vars = findVariables(expr);
-  if (vars.length > 0) {
-    variable = vars[0];
-  }
-  
-  // 尝试通过按项分割提取系数
-  const terms = expandTerms(expr);
-  let a = 0, b = 0, c = 0;
-  
-  for (const term of terms) {
-    if (term.includes(`${variable}^2`) || term.includes(`${variable}²`)) {
-      // 二次项
-      a += extractCoefficient(term.replace(`^2`, ''), variable);
-    } else if (term.includes(variable)) {
-      // 一次项
-      b += extractCoefficient(term, variable);
-    } else {
-      // 常数项
-      c += parseFloat(term) || 0;
-    }
-  }
-  
-  return { a, b, c, variable };
-}
-
-// 使用mathjs尝试求解方程
-function solveWithMath(equation) {
-  try {
-    if (!equation.includes('=')) {
-      return null;
-    }
-    
-    const [left, right] = equation.split('=').map(side => side.trim());
-    const expr = `${left} - (${right})`;
-    
-    // 找出变量
-    const vars = findVariables(equation);
-    if (vars.length !== 1) return null;
-    
-    const variable = vars[0];
-    
-    // 尝试数值求解
-    // 注意：实际项目中应该使用更专业的方程求解库
-    // 这里使用简化的线性插值法尝试求解，高级方程可能不准确
-    
-    // 对于简单的线性方程可以直接计算
-    const simplified = math.simplify(expr).toString();
-    
-    if (simplified.match(new RegExp(`^[\\d\\+\\-\\*\\/\\.]*${variable}[\\d\\+\\-\\*\\/\\.]*$`))) {
-      // 简单的形式如 ax + b
-      const withX1 = simplified.replace(new RegExp(variable, 'g'), '1');
-      const withX0 = simplified.replace(new RegExp(variable, 'g'), '0');
-      
-      const y1 = math.evaluate(withX1);
-      const y0 = math.evaluate(withX0);
-      
-      // 线性插值: x = -y0 / (y1 - y0)
-      if (y1 !== y0) {
-        const solution = -y0 / (y1 - y0);
-        return `${variable} = ${solution}`;
-      }
-    }
-    
-    return null;
-  } catch (e) {
-    console.error('求解出错:', e);
-    return null;
-  }
-}
-
-// 生成解题说明
-function generateExplanation(solution) {
-  const { type, method, steps, result } = solution;
-  
-  if (type === 'algebra' || type === 'quadratic') {
-    return `这是一个${type === 'quadratic' ? '二次' : '线性'}方程。解题使用${method}，通过${steps.length}个步骤得出结果：${result}。`;
-  } else if (type === 'arithmetic') {
-    return `这是一个算术表达式。通过直接计算得出结果：${result}。`;
-  } else {
-    return `使用${method}解决这个问题，最终结果是：${result}。`;
-  }
-} 
+startServer(); 

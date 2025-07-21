@@ -4,8 +4,10 @@
   "description": "数学解题应用后端服务",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "nodemon server.js"
+    "start": "node start.js",
+    "dev": "nodemon start.js",
+    "server": "node server.js",
+    "check": "node -e \"console.log('Node.js版本:', process.version); console.log('MongoDB包:', require('mongoose').version);\""
   },
   "dependencies": {
     "axios": "^1.6.0",

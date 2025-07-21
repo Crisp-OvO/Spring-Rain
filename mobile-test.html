@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Qwen数学解题助手 - 手机测试</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(45deg, #ff6b6b, #4ecdc4);
+            color: white;
+            padding: 30px 20px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 24px;
+            margin-bottom: 10px;
+        }
+        
+        .status {
+            background: rgba(255,255,255,0.2);
+            padding: 10px;
+            border-radius: 10px;
+            margin-top: 15px;
+        }
+        
+        .content {
+            padding: 30px 20px;
+        }
+        
+        .test-section {
+            margin-bottom: 30px;
+        }
+        
+        .test-section h3 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 18px;
+        }
+        
+        .btn {
+            width: 100%;
+            padding: 15px;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-bottom: 10px;
+            transition: all 0.3s ease;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+        }
+        
+        .btn-success {
+            background: linear-gradient(45deg, #56ab2f, #a8e6cf);
+            color: white;
+        }
+        
+        .btn-warning {
+            background: linear-gradient(45deg, #f093fb, #f5576c);
+            color: white;
+        }
+        
+        .btn:active {
+            transform: translateY(2px);
+        }
+        
+        .input-group {
+            margin-bottom: 15px;
+        }
+        
+        .input-group label {
+            display: block;
+            margin-bottom: 5px;
+            color: #555;
+            font-weight: 600;
+        }
+        
+        .input-group input, .input-group textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e1e8ed;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.3s ease;
+        }
+        
+        .input-group input:focus, .input-group textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .result {
+            background: #f8f9ff;
+            border: 2px solid #e1e8ed;
+            border-radius: 10px;
+            padding: 15px;
+            margin-top: 15px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        
+        .loading {
+            text-align: center;
+            color: #667eea;
+            font-weight: 600;
+        }
+        
+        .success {
+            color: #27ae60;
+            font-weight: 600;
+        }
+        
+        .error {
+            color: #e74c3c;
+            font-weight: 600;
+        }
+        
+        .file-input {
+            display: none;
+        }
+        
+        .file-label {
+            display: inline-block;
+            width: 100%;
+            padding: 15px;
+            background: linear-gradient(45deg, #3498db, #2980b9);
+            color: white;
+            border-radius: 10px;
+            text-align: center;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+        
+        .file-label:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(52, 152, 219, 0.4);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🧮 Qwen数学解题助手</h1>
+            <p>手机端API测试界面</p>
+            <div class="status" id="connectionStatus">
+                <span id="statusText">正在检测连接...</span>
+            </div>
+        </div>
+        
+        <div class="content">
+            <!-- 连接测试 -->
+            <div class="test-section">
+                <h3>🔗 连接测试</h3>
+                <button class="btn btn-primary" onclick="testConnection()">
+                    测试后端连接
+                </button>
+                <div id="connectionResult" class="result" style="display: none;"></div>
+            </div>
+            
+            <!-- 数学解题测试 -->
+            <div class="test-section">
+                <h3>🧮 数学解题测试</h3>
+                <div class="input-group">
+                    <label for="mathExpression">数学表达式：</label>
+                    <input type="text" id="mathExpression" placeholder="例如：2x + 3 = 7" value="2x + 3 = 7">
+                </div>
+                <button class="btn btn-success" onclick="solveMath()">
+                    开始解题
+                </button>
+                <div id="solveResult" class="result" style="display: none;"></div>
+            </div>
+            
+            <!-- OCR测试 -->
+            <div class="test-section">
+                <h3>📷 OCR识别测试</h3>
+                <input type="file" id="imageFile" class="file-input" accept="image/*" onchange="uploadImage()">
+                <label for="imageFile" class="file-label">
+                    📸 选择图片进行OCR识别
+                </label>
+                <div id="ocrResult" class="result" style="display: none;"></div>
+            </div>
+            
+            <!-- 历史记录测试 -->
+            <div class="test-section">
+                <h3>📚 历史记录测试</h3>
+                <button class="btn btn-warning" onclick="getHistory()">
+                    获取历史记录
+                </button>
+                <div id="historyResult" class="result" style="display: none;"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://10.233.15.100:3001';
+        
+        // 页面加载时自动测试连接
+        window.onload = function() {
+            testConnection();
+        };
+        
+        async function testConnection() {
+            const statusText = document.getElementById('statusText');
+            const result = document.getElementById('connectionResult');
+            
+            statusText.textContent = '正在测试连接...';
+            statusText.className = 'loading';
+            result.style.display = 'block';
+            result.textContent = '正在连接到后端服务...\n';
+            
+            try {
+                const response = await fetch(`${API_BASE}/health`);
+                const data = await response.json();
+                
+                statusText.textContent = '✅ 连接成功';
+                statusText.className = 'success';
+                
+                result.textContent = '✅ 连接测试成功！\n\n' + 
+                    '服务状态: ' + data.status + '\n' +
+                    '版本: ' + data.version + '\n' +
+                    '数学模型: ' + data.models.math + '\n' +
+                    'OCR模型: ' + data.models.ocr + '\n' +
+                    '时间戳: ' + data.timestamp;
+                result.className = 'result success';
+                
+            } catch (error) {
+                statusText.textContent = '❌ 连接失败';
+                statusText.className = 'error';
+                
+                result.textContent = '❌ 连接测试失败！\n\n' +
+                    '错误信息: ' + error.message + '\n\n' +
+                    '请检查：\n' +
+                    '1. 手机和电脑在同一WiFi网络\n' +
+                    '2. 后端服务正在运行\n' +
+                    '3. IP地址配置正确';
+                result.className = 'result error';
+            }
+        }
+        
+        async function solveMath() {
+            const expression = document.getElementById('mathExpression').value;
+            const result = document.getElementById('solveResult');
+            
+            if (!expression.trim()) {
+                alert('请输入数学表达式');
+                return;
+            }
+            
+            result.style.display = 'block';
+            result.textContent = '🧮 正在解题中...\n正在调用Qwen数学模型...';
+            result.className = 'result loading';
+            
+            try {
+                const response = await fetch(`${API_BASE}/math/solve`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        expression: expression,
+                        method: 'thinking'
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let fullResult = '';
+                
+                result.textContent = '✅ 解题成功！\n\n正在接收解题过程...\n\n';
+                
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    
+                    const chunk = decoder.decode(value);
+                    const lines = chunk.split('\n');
+                    
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const data = line.slice(6);
+                            if (data === '[DONE]') {
+                                result.textContent += '\n\n🎉 解题完成！';
+                                result.className = 'result success';
+                                return;
+                            }
+                            
+                            try {
+                                const parsed = JSON.parse(data);
+                                if (parsed.type === 'content' && parsed.content) {
+                                    fullResult += parsed.content;
+                                    result.textContent = '✅ 解题过程：\n\n' + fullResult;
+                                } else if (parsed.type === 'thinking' && parsed.content) {
+                                    result.textContent += '\n💭 思考: ' + parsed.content;
+                                }
+                            } catch (e) {
+                                // 忽略解析错误
+                            }
+                        }
+                    }
+                }
+                
+            } catch (error) {
+                result.textContent = '❌ 解题失败！\n\n错误信息: ' + error.message;
+                result.className = 'result error';
+            }
+        }
+        
+        async function uploadImage() {
+            const fileInput = document.getElementById('imageFile');
+            const result = document.getElementById('ocrResult');
+            const file = fileInput.files[0];
+            
+            if (!file) return;
+            
+            result.style.display = 'block';
+            result.textContent = '📷 正在进行OCR识别...\n正在调用Qwen-VL模型...';
+            result.className = 'result loading';
+            
+            try {
+                const formData = new FormData();
+                formData.append('image', file);
+                
+                const response = await fetch(`${API_BASE}/ocr/math`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    result.textContent = '✅ OCR识别成功！\n\n' +
+                        '识别文本: ' + data.text + '\n' +
+                        '数学表达式: ' + data.mathExpression + '\n' +
+                        '置信度: ' + (data.confidence * 100).toFixed(1) + '%\n' +
+                        '模型: ' + data.model + '\n' +
+                        '时间戳: ' + data.timestamp;
+                    result.className = 'result success';
+                    
+                    // 自动填入解题输入框
+                    if (data.mathExpression) {
+                        document.getElementById('mathExpression').value = data.mathExpression;
+                    }
+                } else {
+                    throw new Error(data.message || '识别失败');
+                }
+                
+            } catch (error) {
+                result.textContent = '❌ OCR识别失败！\n\n错误信息: ' + error.message;
+                result.className = 'result error';
+            }
+        }
+        
+        async function getHistory() {
+            const result = document.getElementById('historyResult');
+            
+            result.style.display = 'block';
+            result.textContent = '📚 正在获取历史记录...';
+            result.className = 'result loading';
+            
+            try {
+                const response = await fetch(`${API_BASE}/history?limit=5`);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                
+                if (data.problems && data.problems.length > 0) {
+                    let historyText = '✅ 历史记录 (' + data.total + '条):\n\n';
+                    
+                    data.problems.forEach((problem, index) => {
+                        historyText += `${index + 1}. ${problem.expression}\n`;
+                        historyText += `   答案: ${problem.result}\n`;
+                        historyText += `   时间: ${new Date(problem.timestamp).toLocaleString()}\n\n`;
+                    });
+                    
+                    result.textContent = historyText;
+                    result.className = 'result success';
+                } else {
+                    result.textContent = '📚 暂无历史记录\n\n您可以先进行一些解题操作，然后再查看历史记录。';
+                    result.className = 'result';
+                }
+                
+            } catch (error) {
+                result.textContent = '❌ 获取历史记录失败！\n\n错误信息: ' + error.message;
+                result.className = 'result error';
+            }
+        }
+    </script>
+</body>
+</html> 
