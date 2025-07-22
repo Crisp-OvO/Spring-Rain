@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Qwen数学解题助手 - Web版</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧮</text></svg>">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            flex: 1;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+
+        @media (max-width: 768px) {
+            .main-content {
+                grid-template-columns: 1fr;
+                gap: 20px;
+            }
+        }
+
+        .card {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 40px rgba(0,0,0,0.3);
+        }
+
+        .card h2 {
+            color: #333;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .icon {
+            font-size: 1.5rem;
+        }
+
+        .input-group {
+            margin-bottom: 20px;
+        }
+
+        .input-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #555;
+            font-weight: 500;
+        }
+
+        .input-group input, .input-group textarea, .input-group select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e1e5e9;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.3s ease;
+        }
+
+        .input-group input:focus, .input-group textarea:focus, .input-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .input-group textarea {
+            resize: vertical;
+            min-height: 120px;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            width: 100%;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+            margin-top: 10px;
+        }
+
+        .btn-secondary:hover {
+            background: #5a6268;
+            box-shadow: 0 5px 15px rgba(108, 117, 125, 0.4);
+        }
+
+        .result-area {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+            display: none;
+        }
+
+        .result-area.show {
+            display: block;
+        }
+
+        .result-area h3 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+
+        .result-content {
+            color: #555;
+            line-height: 1.6;
+            white-space: pre-wrap;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+        }
+
+        .loading.show {
+            display: block;
+        }
+
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .image-preview {
+            max-width: 100%;
+            max-height: 200px;
+            margin: 10px 0;
+            border-radius: 8px;
+            display: none;
+        }
+
+        .image-preview.show {
+            display: block;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+
+        .status-online {
+            background: #28a745;
+            box-shadow: 0 0 5px #28a745;
+        }
+
+        .status-offline {
+            background: #dc3545;
+        }
+
+        .footer {
+            text-align: center;
+            color: white;
+            padding: 20px;
+            opacity: 0.8;
+        }
+
+        .error-message {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            border: 1px solid #f5c6cb;
+            display: none;
+        }
+
+        .error-message.show {
+            display: block;
+        }
+
+        .success-message {
+            background: #d4edda;
+            color: #155724;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            border: 1px solid #c3e6cb;
+            display: none;
+        }
+
+        .success-message.show {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🧮 Qwen数学解题助手</h1>
+            <p>基于阿里云最新Qwen模型的智能数学解题工具</p>
+            <p>
+                <span class="status-indicator" id="serverStatus"></span>
+                <span id="serverStatusText">检查服务状态...</span>
+            </p>
+        </div>
+
+        <div class="main-content">
+            <!-- 数学解题 -->
+            <div class="card">
+                <h2>
+                    <span class="icon">📝</span>
+                    数学解题
+                </h2>
+                
+                <div class="input-group">
+                    <label for="mathInput">输入数学题目或表达式：</label>
+                    <textarea 
+                        id="mathInput" 
+                        placeholder="例如：解方程 2x + 5 = 13&#10;或：计算 (3 + 4) × 2 - 1&#10;或：求导 f(x) = x² + 2x + 1"
+                    ></textarea>
+                </div>
+
+                <div class="input-group">
+                    <label for="solveMethod">解题方法：</label>
+                    <select id="solveMethod">
+                        <option value="thinking">思维推理 (推荐)</option>
+                        <option value="cot">思维链推理</option>
+                        <option value="tir">工具增强推理</option>
+                    </select>
+                </div>
+
+                <button class="btn" id="solveBtn" onclick="solveMath()">
+                    🤖 开始解题
+                </button>
+
+                <div class="loading" id="mathLoading">
+                    <div class="spinner"></div>
+                    <p>AI正在思考中...</p>
+                </div>
+
+                <div class="error-message" id="mathError"></div>
+                <div class="success-message" id="mathSuccess"></div>
+
+                <div class="result-area" id="mathResult">
+                    <h3>📊 解题结果</h3>
+                    <div class="result-content" id="mathResultContent"></div>
+                </div>
+            </div>
+
+            <!-- OCR识别 -->
+            <div class="card">
+                <h2>
+                    <span class="icon">📷</span>
+                    图片识别
+                </h2>
+                
+                <div class="input-group">
+                    <label for="imageInput">选择包含数学题目的图片：</label>
+                    <input 
+                        type="file" 
+                        id="imageInput" 
+                        accept="image/*"
+                        onchange="previewImage()"
+                    >
+                </div>
+
+                <img id="imagePreview" class="image-preview" alt="预览图片">
+
+                <button class="btn" id="ocrBtn" onclick="performOCR()" disabled>
+                    👁️ 识别文字
+                </button>
+
+                <button class="btn btn-secondary" onclick="clearImage()">
+                    🗑️ 清除图片
+                </button>
+
+                <div class="loading" id="ocrLoading">
+                    <div class="spinner"></div>
+                    <p>AI正在识别图片...</p>
+                </div>
+
+                <div class="error-message" id="ocrError"></div>
+                <div class="success-message" id="ocrSuccess"></div>
+
+                <div class="result-area" id="ocrResult">
+                    <h3>📋 识别结果</h3>
+                    <div class="result-content" id="ocrResultContent"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="footer">
+        <p>© 2024 Qwen数学解题助手 - 基于阿里云百炼平台</p>
+        <p>后端API: <span id="backendUrl">http://localhost:3001</span></p>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:3001';
+        let currentOCRRequest = null;
+
+        // 检查服务器状态
+        async function checkServerStatus() {
+            try {
+                const response = await fetch(`${API_BASE}/health`);
+                if (response.ok) {
+                    document.getElementById('serverStatus').className = 'status-indicator status-online';
+                    document.getElementById('serverStatusText').textContent = '服务正常';
+                    return true;
+                } else {
+                    throw new Error('服务不可用');
+                }
+            } catch (error) {
+                document.getElementById('serverStatus').className = 'status-indicator status-offline';
+                document.getElementById('serverStatusText').textContent = '服务离线';
+                return false;
+            }
+        }
+
+        // 显示错误信息
+        function showError(elementId, message) {
+            const errorElement = document.getElementById(elementId);
+            errorElement.textContent = message;
+            errorElement.classList.add('show');
+            setTimeout(() => {
+                errorElement.classList.remove('show');
+            }, 5000);
+        }
+
+        // 显示成功信息
+        function showSuccess(elementId, message) {
+            const successElement = document.getElementById(elementId);
+            successElement.textContent = message;
+            successElement.classList.add('show');
+            setTimeout(() => {
+                successElement.classList.remove('show');
+            }, 3000);
+        }
+
+        // 数学解题
+        async function solveMath() {
+            const expression = document.getElementById('mathInput').value.trim();
+            const method = document.getElementById('solveMethod').value;
+            
+            if (!expression) {
+                showError('mathError', '请输入数学题目或表达式');
+                return;
+            }
+
+            const solveBtn = document.getElementById('solveBtn');
+            const loadingDiv = document.getElementById('mathLoading');
+            const resultDiv = document.getElementById('mathResult');
+            const resultContent = document.getElementById('mathResultContent');
+
+            // 重置状态
+            resultDiv.classList.remove('show');
+            loadingDiv.classList.add('show');
+            solveBtn.disabled = true;
+            solveBtn.textContent = '解题中...';
+
+            try {
+                const response = await fetch(`${API_BASE}/math/solve`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        expression: expression,
+                        method: method,
+                        enableSearch: false
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP错误: ${response.status}`);
+                }
+
+                // 检查是否是流式响应
+                const contentType = response.headers.get('content-type');
+                if (contentType && contentType.includes('text/event-stream')) {
+                    // 处理流式响应
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder();
+                    let fullResponse = '';
+                    let thinkingContent = '';
+
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+
+                        const chunk = decoder.decode(value);
+                        const lines = chunk.split('\n');
+
+                        for (const line of lines) {
+                            if (line.startsWith('data: ')) {
+                                const data = line.replace('data: ', '');
+                                if (data === '[DONE]') {
+                                    break;
+                                }
+
+                                try {
+                                    const parsed = JSON.parse(data);
+                                    
+                                    if (parsed.type === 'thinking') {
+                                        thinkingContent += parsed.content;
+                                    } else if (parsed.type === 'content') {
+                                        fullResponse += parsed.content;
+                                        // 实时更新显示
+                                        resultContent.textContent = '🤔 思考过程:\n' + thinkingContent + '\n\n📝 解答:\n' + fullResponse;
+                                        resultDiv.classList.add('show');
+                                    } else if (parsed.type === 'complete') {
+                                        // 解题完成
+                                        const solution = parsed.solution;
+                                        let displayText = `📝 题目: ${solution.expression}\n\n`;
+                                        displayText += `🎯 解题方法: ${solution.method}\n\n`;
+                                        if (solution.steps && solution.steps.length > 0) {
+                                            displayText += `📋 解题步骤:\n${solution.steps.map((step, index) => `${index + 1}. ${step}`).join('\n')}\n\n`;
+                                        }
+                                        displayText += `✅ 最终答案: ${solution.result}\n\n`;
+                                        displayText += `💡 详细解释:\n${solution.explanation}`;
+                                        
+                                        resultContent.textContent = displayText;
+                                        showSuccess('mathSuccess', '解题完成！');
+                                        break;
+                                    } else if (parsed.type === 'error') {
+                                        throw new Error(parsed.error);
+                                    }
+                                } catch (parseError) {
+                                    console.warn('解析数据失败:', parseError);
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // 处理普通JSON响应
+                    const result = await response.json();
+                    let displayText = `📝 题目: ${expression}\n\n`;
+                    displayText += `✅ 解答: ${result.solution || result.answer || '未找到解答'}\n\n`;
+                    if (result.steps) {
+                        displayText += `📋 解题步骤:\n${result.steps.join('\n')}\n\n`;
+                    }
+                    if (result.explanation) {
+                        displayText += `💡 解释: ${result.explanation}`;
+                    }
+                    
+                    resultContent.textContent = displayText;
+                    resultDiv.classList.add('show');
+                    showSuccess('mathSuccess', '解题完成！');
+                }
+
+            } catch (error) {
+                console.error('解题失败:', error);
+                showError('mathError', `解题失败: ${error.message}`);
+            } finally {
+                loadingDiv.classList.remove('show');
+                solveBtn.disabled = false;
+                solveBtn.textContent = '🤖 开始解题';
+            }
+        }
+
+        // 预览图片
+        function previewImage() {
+            const fileInput = document.getElementById('imageInput');
+            const preview = document.getElementById('imagePreview');
+            const ocrBtn = document.getElementById('ocrBtn');
+            
+            if (fileInput.files && fileInput.files[0]) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    preview.src = e.target.result;
+                    preview.classList.add('show');
+                    ocrBtn.disabled = false;
+                };
+                reader.readAsDataURL(fileInput.files[0]);
+            }
+        }
+
+        // 清除图片
+        function clearImage() {
+            document.getElementById('imageInput').value = '';
+            document.getElementById('imagePreview').classList.remove('show');
+            document.getElementById('ocrBtn').disabled = true;
+            document.getElementById('ocrResult').classList.remove('show');
+        }
+
+        // OCR识别
+        async function performOCR() {
+            const fileInput = document.getElementById('imageInput');
+            if (!fileInput.files || !fileInput.files[0]) {
+                showError('ocrError', '请先选择图片');
+                return;
+            }
+
+            const ocrBtn = document.getElementById('ocrBtn');
+            const loadingDiv = document.getElementById('ocrLoading');
+            const resultDiv = document.getElementById('ocrResult');
+            const resultContent = document.getElementById('ocrResultContent');
+
+            // 重置状态
+            resultDiv.classList.remove('show');
+            loadingDiv.classList.add('show');
+            ocrBtn.disabled = true;
+            ocrBtn.textContent = '识别中...';
+
+            try {
+                const formData = new FormData();
+                formData.append('image', fileInput.files[0]);
+
+                const response = await fetch(`${API_BASE}/ocr/math`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    let displayText = `🔍 识别结果:\n${result.text}\n\n`;
+                    if (result.mathExpression && result.mathExpression !== result.text) {
+                        displayText += `🧮 数学表达式: ${result.mathExpression}\n\n`;
+                    }
+                    displayText += `📊 置信度: ${(result.confidence * 100).toFixed(1)}%\n\n`;
+                    displayText += `🤖 识别模型: ${result.model || 'Unknown'}\n`;
+                    displayText += `⏱️ 识别时间: ${result.timestamp}`;
+
+                    if (result.suggestions && result.suggestions.length > 0) {
+                        displayText += `\n\n💡 建议:\n${result.suggestions.join('\n')}`;
+                    }
+
+                    resultContent.textContent = displayText;
+                    resultDiv.classList.add('show');
+                    showSuccess('ocrSuccess', 'OCR识别完成！');
+
+                    // 如果识别到数学内容，自动填入解题框
+                    if (result.text && result.text.trim()) {
+                        document.getElementById('mathInput').value = result.text.trim();
+                    }
+                } else {
+                    throw new Error(result.message || result.error || '识别失败');
+                }
+
+            } catch (error) {
+                console.error('OCR识别失败:', error);
+                showError('ocrError', `OCR识别失败: ${error.message}`);
+            } finally {
+                loadingDiv.classList.remove('show');
+                ocrBtn.disabled = false;
+                ocrBtn.textContent = '👁️ 识别文字';
+            }
+        }
+
+        // 页面加载完成后检查服务器状态
+        document.addEventListener('DOMContentLoaded', function() {
+            checkServerStatus();
+            
+            // 每30秒检查一次服务器状态
+            setInterval(checkServerStatus, 30000);
+
+            // 添加回车键快捷解题
+            document.getElementById('mathInput').addEventListener('keydown', function(e) {
+                if (e.ctrlKey && e.key === 'Enter') {
+                    solveMath();
+                }
+            });
+        });
+    </script>
+</body>
+</html> 

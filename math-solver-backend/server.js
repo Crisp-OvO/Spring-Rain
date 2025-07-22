@@ -1160,6 +1160,96 @@ app.get('/health', (req, res) => {
   });
 });
 
+// 根路由 - API状态页面
+app.get('/', (req, res) => {
+  const hasApiKey = !!QWEN_CONFIG.DASHSCOPE.API_KEY;
+  const apiStatus = hasApiKey ? '✅ 已配置' : '❌ 未配置';
+  
+  res.send(`
+    <!DOCTYPE html>
+    <html lang="zh-CN">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Qwen数学解题助手 - API服务</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
+            .container { max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+            .header { text-align: center; color: #333; margin-bottom: 30px; }
+            .status { display: flex; justify-content: space-between; margin: 20px 0; padding: 15px; background: #f8f9fa; border-radius: 5px; }
+            .status-item { text-align: center; }
+            .status-value { font-size: 24px; font-weight: bold; color: #28a745; }
+            .api-list { margin: 20px 0; }
+            .api-item { margin: 10px 0; padding: 10px; background: #e9ecef; border-radius: 5px; }
+            .btn { display: inline-block; padding: 10px 20px; background: #007bff; color: white; text-decoration: none; border-radius: 5px; margin: 5px; }
+            .btn:hover { background: #0056b3; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>🧮 Qwen数学解题助手</h1>
+                <h2>后端API服务</h2>
+            </div>
+            
+            <div class="status">
+                <div class="status-item">
+                    <div>服务状态</div>
+                    <div class="status-value">✅ 运行中</div>
+                </div>
+                <div class="status-item">
+                    <div>API密钥</div>
+                    <div class="status-value">${apiStatus}</div>
+                </div>
+                <div class="status-item">
+                    <div>版本</div>
+                    <div class="status-value">v2.0.0</div>
+                </div>
+            </div>
+            
+            <h3>📡 可用的API接口</h3>
+            <div class="api-list">
+                <div class="api-item"><strong>GET /health</strong> - 健康检查</div>
+                <div class="api-item"><strong>POST /math/solve</strong> - 数学解题</div>
+                <div class="api-item"><strong>POST /ocr/math</strong> - 数学公式OCR识别</div>
+                <div class="api-item"><strong>GET /history</strong> - 获取解题历史</div>
+                <div class="api-item"><strong>POST /api/test-connection</strong> - 测试API连接</div>
+            </div>
+            
+            <h3>🤖 AI模型配置</h3>
+            <div class="api-list">
+                <div class="api-item"><strong>数学模型:</strong> ${QWEN_CONFIG.MATH_MODEL.QWEN_PLUS.name}</div>
+                <div class="api-item"><strong>OCR模型:</strong> ${QWEN_CONFIG.OCR_MODEL.QWEN_VL_MAX.name}</div>
+            </div>
+            
+            <div style="text-align: center; margin-top: 30px;">
+                <a href="/health" class="btn">健康检查</a>
+                <a href="/api/test-connection" class="btn" onclick="testConnection(event)">测试连接</a>
+            </div>
+            
+            <div style="text-align: center; margin-top: 20px; color: #666;">
+                <p>启动时间: ${new Date().toISOString()}</p>
+                <p>端口: ${PORT}</p>
+            </div>
+        </div>
+        
+        <script>
+            async function testConnection(e) {
+                e.preventDefault();
+                try {
+                    const response = await fetch('/api/test-connection', { method: 'POST' });
+                    const result = await response.json();
+                    alert('连接测试: ' + (result.success ? '成功' : '失败'));
+                } catch (error) {
+                    alert('连接测试失败: ' + error.message);
+                }
+            }
+        </script>
+    </body>
+    </html>
+  `);
+});
+
 // 错误处理中间件
 app.use((error, req, res, next) => {
   console.error('服务器错误:', error);

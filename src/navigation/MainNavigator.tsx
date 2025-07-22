@@ -2,7 +2,7 @@ import React, { useContext } from 'react';
 import { View, Text } from 'react-native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { Ionicons } from '@expo/vector-icons';
+import Icon from 'react-native-vector-icons/Ionicons';
 import { useTheme } from 'react-native-paper';
 
 import { AuthContext } from '../contexts/AuthContext';
@@ -78,7 +78,7 @@ const MainTabNavigator = () => {
             iconName = focused ? 'bar-chart' : 'bar-chart-outline';
           }
           
-          return <Ionicons name={iconName as any} size={size} color={color} />;
+          return <Icon name={iconName as any} size={size} color={color} />;
         },
         tabBarActiveTintColor: theme.colors.primary,
         tabBarInactiveTintColor: theme.colors.disabled,
